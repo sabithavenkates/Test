@@ -1,0 +1,15 @@
+CREATE OR ALTER PROCEDURE rec10.usp_IngestRun_Start
+    @MachineName NVARCHAR(128) = NULL,
+    @AppVersion  NVARCHAR(50)  = NULL,
+    @Notes       NVARCHAR(4000)= NULL,
+    @IngestRunId BIGINT OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    INSERT INTO rec10.IngestRun (MachineName, AppVersion, Notes)
+    VALUES (@MachineName, @AppVersion, @Notes);
+
+    SET @IngestRunId = SCOPE_IDENTITY();
+END
+GO

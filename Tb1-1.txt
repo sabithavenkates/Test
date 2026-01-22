@@ -1,0 +1,9 @@
+CREATE TABLE rec10.IngestRun (
+    IngestRunId      BIGINT IDENTITY(1,1) PRIMARY KEY,
+    StartedAtUtc     DATETIME2(3) NOT NULL DEFAULT SYSUTCDATETIME(),
+    FinishedAtUtc    DATETIME2(3) NULL,
+    MachineName      NVARCHAR(128) NULL,
+    AppVersion       NVARCHAR(50)  NULL,
+    Notes            NVARCHAR(4000) NULL
+);
+GO

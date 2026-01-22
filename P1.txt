@@ -1,0 +1,280 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Configuration;
+
+public static class Program
+{
+    public static async Task<int> Main(string[] args)
+    {
+        var config = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: false)
+            .Build();
+
+        var cs = config.GetConnectionString("Sql") ?? throw new Exception("Missing connection string.");
+        var ingestCfg = config.GetSection("Rec10Ingest");
+
+        var inputFolder = ingestCfg["InputFolder"] ?? throw new Exception("Missing InputFolder.");
+        var pattern = ingestCfg["FileSearchPattern"] ?? "*";
+        var archiveFolder = ingestCfg["ArchiveFolder"] ?? Path.Combine(inputFolder, "_archive");
+        var batchSize = int.TryParse(ingestCfg["BatchSize"], out var b) ? b : 2000;
+
+        Directory.CreateDirectory(archiveFolder);
+
+        var files = Directory.GetFiles(inputFolder, pattern, SearchOption.TopDirectoryOnly)
+            .OrderBy(f => f)
+            .ToList();
+
+        if (files.Count == 0)
+        {
+            Console.WriteLine("No files found.");
+            return 0;
+        }
+
+        long ingestRunId;
+        await using (var conn = new SqlConnection(cs))
+        {
+            await conn.OpenAsync();
+            ingestRunId = await StartRun(conn);
+        }
+
+        Console.WriteLine($"IngestRunId: {ingestRunId}");
+        Console.WriteLine($"Files: {files.Count}");
+
+        foreach (var file in files)
+        {
+            Console.WriteLine($"Processing: {Path.GetFileName(file)}");
+
+            var fileType = DetectFileType(file);
+            var rawBatch = CreateRawLineDataTable();
+            var reportBatch = CreateReportRecordDataTable();
+
+            int lineNo = 0;
+
+            foreach (var line in File.ReadLines(file))
+            {
+                lineNo++;
+
+                var normalized = NormalizeLine(line); // keep as-is but make safe
+                var hash = Sha256(normalized);
+
+                rawBatch.Rows.Add(
+                    Path.GetFileName(file),
+                    fileType,
+                    lineNo,
+                    normalized.Length,
+                    normalized.Length <= 200 ? normalized : normalized[..200],
+                    hash
+                );
+
+                // parse only if it is CHG/RECON report-like
+                if (fileType is "CHG_REPORT" or "RECON_REPORT")
+                {
+                    if (TryParseReport80(normalized, out var rec))
+                    {
+                        reportBatch.Rows.Add(
+                            Path.GetFileName(file),
+                            fileType,
+                            lineNo,
+                            rec.Npi,
+                            rec.ChangeType,
+                            rec.AbcbsValue,
+                            rec.LsvValue,
+                            rec.Raw80
+                        );
+                    }
+                }
+
+                if (rawBatch.Rows.Count >= batchSize)
+                {
+                    await InsertBatches(cs, ingestRunId, rawBatch, reportBatch);
+                    rawBatch.Clear();
+                    reportBatch.Clear();
+                }
+            }
+
+            // flush remainder
+            if (rawBatch.Rows.Count > 0 || reportBatch.Rows.Count > 0)
+                await InsertBatches(cs, ingestRunId, rawBatch, reportBatch);
+
+            // archive after success
+            var dest = Path.Combine(archiveFolder, Path.GetFileName(file));
+            if (File.Exists(dest)) File.Delete(dest);
+            File.Move(file, dest);
+        }
+
+        await using (var conn = new SqlConnection(cs))
+        {
+            await conn.OpenAsync();
+            await FinishRun(conn, ingestRunId);
+        }
+
+        Console.WriteLine("Done.");
+        return 0;
+    }
+
+    // -------------------- SQL Calls --------------------
+
+    private static async Task<long> StartRun(SqlConnection conn)
+    {
+        await using var cmd = new SqlCommand("rec10.usp_IngestRun_Start", conn);
+        cmd.CommandType = CommandType.StoredProcedure;
+
+        cmd.Parameters.AddWithValue("@MachineName", Environment.MachineName);
+        cmd.Parameters.AddWithValue("@AppVersion", "1.0.0");
+        cmd.Parameters.AddWithValue("@Notes", "REC10 ingest (API update paused)");
+
+        var outParam = new SqlParameter("@IngestRunId", SqlDbType.BigInt) { Direction = ParameterDirection.Output };
+        cmd.Parameters.Add(outParam);
+
+        await cmd.ExecuteNonQueryAsync();
+        return (long)outParam.Value;
+    }
+
+    private static async Task FinishRun(SqlConnection conn, long ingestRunId)
+    {
+        await using var cmd = new SqlCommand("rec10.usp_IngestRun_Finish", conn);
+        cmd.CommandType = CommandType.StoredProcedure;
+        cmd.Parameters.AddWithValue("@IngestRunId", ingestRunId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private static async Task InsertBatches(string cs, long ingestRunId, DataTable rawBatch, DataTable reportBatch)
+    {
+        await using var conn = new SqlConnection(cs);
+        await conn.OpenAsync();
+
+        // Insert Raw
+        if (rawBatch.Rows.Count > 0)
+        {
+            await using var cmd = new SqlCommand("rec10.usp_RawLine_InsertBatch", conn);
+            cmd.CommandType = CommandType.StoredProcedure;
+            cmd.Parameters.AddWithValue("@IngestRunId", ingestRunId);
+
+            var tvp = cmd.Parameters.AddWithValue("@Rows", rawBatch);
+            tvp.SqlDbType = SqlDbType.Structured;
+            tvp.TypeName = "rec10.RawLineTvp";
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // Insert Report
+        if (reportBatch.Rows.Count > 0)
+        {
+            await using var cmd = new SqlCommand("rec10.usp_ReportRecord_InsertBatch", conn);
+            cmd.CommandType = CommandType.StoredProcedure;
+            cmd.Parameters.AddWithValue("@IngestRunId", ingestRunId);
+
+            var tvp = cmd.Parameters.AddWithValue("@Rows", reportBatch);
+            tvp.SqlDbType = SqlDbType.Structured;
+            tvp.TypeName = "rec10.ReportRecordTvp";
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    // -------------------- DataTables / Parsing --------------------
+
+    private static DataTable CreateRawLineDataTable()
+    {
+        var dt = new DataTable();
+        dt.Columns.Add("SourceFile", typeof(string));
+        dt.Columns.Add("FileType", typeof(string));
+        dt.Columns.Add("LineNumber", typeof(int));
+        dt.Columns.Add("LineLen", typeof(int));
+        dt.Columns.Add("LineText", typeof(string));
+        dt.Columns.Add("LineHash", typeof(byte[]));
+        return dt;
+    }
+
+    private static DataTable CreateReportRecordDataTable()
+    {
+        var dt = new DataTable();
+        dt.Columns.Add("SourceFile", typeof(string));
+        dt.Columns.Add("FileType", typeof(string));
+        dt.Columns.Add("LineNumber", typeof(int));
+        dt.Columns.Add("NPI", typeof(string));
+        dt.Columns.Add("ChangeType", typeof(string));
+        dt.Columns.Add("AbcbsValue", typeof(string));
+        dt.Columns.Add("LsvValue", typeof(string));
+        dt.Columns.Add("Raw80", typeof(string));
+        return dt;
+    }
+
+    private static string NormalizeLine(string line)
+    {
+        // Keep original spacing as much as possible; just remove trailing CR/LF artifacts.
+        line = line.Replace("\r", "").Replace("\n", "");
+
+        // If line is shorter than 80 for fixed files, right-pad it (safer for parsing).
+        // If line is longer, keep it (raw table stores length) but parser will use first 80.
+        return line;
+    }
+
+    private static string DetectFileType(string filePath)
+    {
+        var name = Path.GetFileName(filePath).ToUpperInvariant();
+
+        if (name.Contains("CHG_REPORT") || name.Contains("CHG-REPORT")) return "CHG_REPORT";
+        if (name.Contains("RECON_REPORT") || name.Contains("RECON-REPORT")) return "RECON_REPORT";
+        if (name.Contains("MET_ERR") || name.Contains("MET-ERR")) return "MET_ERR";
+        if (name.Contains("MET_RPT") || name.Contains("MET-RPT")) return "MET_RPT";
+        if (name.Contains("REC10_CHG")) return "REC10_CHG";
+        if (name.Contains("REC10_OUT")) return "REC10_OUT";
+
+        // If your file is exactly "Rec10_parsed_{date}" we’ll treat as REC10_OUT for now
+        if (name.StartsWith("REC10_PARSED_")) return "REC10_OUT";
+
+        return "UNKNOWN";
+    }
+
+    // 80-byte report layout:
+    // 1 filler
+    // NPI 10
+    // 1 filler
+    // TYPE 11
+    // 1 filler
+    // ABCBS 27
+    // 1 filler
+    // LSV 27
+    // 1 filler
+    private static bool TryParseReport80(string line, out Report80 rec)
+    {
+        rec = default;
+
+        var raw80 = line.Length >= 80 ? line[..80] : line.PadRight(80);
+
+        try
+        {
+            var npi = raw80.Substring(1, 10);
+            var type = raw80.Substring(12, 11);
+            var abcbs = raw80.Substring(24, 27);
+            var lsv = raw80.Substring(52, 27);
+
+            rec = new Report80(
+                Npi: npi.Trim(),
+                ChangeType: type.Trim(),
+                AbcbsValue: abcbs.Trim(),
+                LsvValue: lsv.Trim(),
+                Raw80: raw80
+            );
+
+            // minimal validity: NPI should be 10 chars and not empty
+            return !string.IsNullOrWhiteSpace(rec.Npi);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static byte[] Sha256(string text)
+    {
+        using var sha = SHA256.Create();
+        return sha.ComputeHash(Encoding.UTF8.GetBytes(text));
+    }
+
+    private readonly record struct Report80(string Npi, string ChangeType, string AbcbsValue, string LsvValue, string Raw80);
+}

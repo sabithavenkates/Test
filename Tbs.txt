@@ -1,8 +1,0 @@
-CREATE TABLE dbo.LSVRec10ProviderIdStage
-(
-    BatchId     UNIQUEIDENTIFIER NOT NULL,
-    ProviderId  NVARCHAR(50)     NOT NULL,
-    CreatedOn   DATETIME2(0)     NOT NULL DEFAULT (SYSUTCDATETIME()),
-
-    CONSTRAINT PK_LSVRec10ProviderIdStage PRIMARY KEY (BatchId, ProviderId)
-);

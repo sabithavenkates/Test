@@ -1,0 +1,12 @@
+CREATE OR ALTER PROCEDURE rec10.usp_RawLine_InsertBatch
+    @IngestRunId BIGINT,
+    @Rows rec10.RawLineTvp READONLY
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    INSERT INTO rec10.RawLine (IngestRunId, SourceFile, FileType, LineNumber, LineLen, LineText, LineHash)
+    SELECT @IngestRunId, SourceFile, FileType, LineNumber, LineLen, LineText, LineHash
+    FROM @Rows;
+END
+GO

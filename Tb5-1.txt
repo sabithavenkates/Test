@@ -1,0 +1,15 @@
+CREATE TABLE rec10.PendingApiAction (
+    PendingApiActionId BIGINT IDENTITY(1,1) PRIMARY KEY,
+    IngestRunId        BIGINT NOT NULL,
+    NPI                CHAR(10) NOT NULL,
+    ActionType         NVARCHAR(30) NOT NULL,  -- e.g., "NAME_CHANGE", "REINSTATE_PROVIDER", "TERMINATE_PROVIDER", etc
+    PayloadJson        NVARCHAR(MAX) NOT NULL, -- what we would send to API later
+    Status             NVARCHAR(20) NOT NULL DEFAULT 'PENDING', -- PENDING / SENT / FAILED (we won’t update now; later we can)
+    CreatedAtUtc       DATETIME2(3) NOT NULL DEFAULT SYSUTCDATETIME(),
+
+    CONSTRAINT FK_PendingApiAction_IngestRun FOREIGN KEY (IngestRunId) REFERENCES rec10.IngestRun(IngestRunId)
+);
+GO
+
+CREATE INDEX IX_PendingApiAction_RunNpi ON rec10.PendingApiAction (IngestRunId, NPI);
+GO

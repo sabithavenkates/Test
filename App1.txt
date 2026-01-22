@@ -1,0 +1,11 @@
+{
+  "ConnectionStrings": {
+    "Sql": "Server=YOURSERVER;Database=YOURDB;Trusted_Connection=True;TrustServerCertificate=True;"
+  },
+  "Rec10Ingest": {
+    "InputFolder": "C:\\Rec10\\Input",
+    "FileSearchPattern": "*Rec10*",
+    "ArchiveFolder": "C:\\Rec10\\Archive",
+    "BatchSize": 2000
+  }
+}

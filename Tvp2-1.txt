@@ -1,0 +1,11 @@
+CREATE TYPE rec10.ReportRecordTvp AS TABLE (
+    SourceFile   NVARCHAR(260) NOT NULL,
+    FileType     NVARCHAR(30)  NOT NULL,
+    LineNumber   INT NOT NULL,
+    NPI          CHAR(10) NULL,
+    ChangeType   CHAR(11) NULL,
+    AbcbsValue   NVARCHAR(27) NULL,
+    LsvValue     NVARCHAR(27) NULL,
+    Raw80        CHAR(80) NOT NULL
+);
+GO

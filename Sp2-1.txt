@@ -1,0 +1,11 @@
+CREATE OR ALTER PROCEDURE rec10.usp_IngestRun_Finish
+    @IngestRunId BIGINT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    UPDATE rec10.IngestRun
+    SET FinishedAtUtc = SYSUTCDATETIME()
+    WHERE IngestRunId = @IngestRunId;
+END
+GO

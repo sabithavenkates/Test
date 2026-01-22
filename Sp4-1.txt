@@ -1,0 +1,13 @@
+CREATE OR ALTER PROCEDURE rec10.usp_ReportRecord_InsertBatch
+    @IngestRunId BIGINT,
+    @Rows rec10.ReportRecordTvp READONLY
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    INSERT INTO rec10.ReportRecord
+    (IngestRunId, SourceFile, FileType, LineNumber, NPI, ChangeType, AbcbsValue, LsvValue, Raw80)
+    SELECT @IngestRunId, SourceFile, FileType, LineNumber, NPI, ChangeType, AbcbsValue, LsvValue, Raw80
+    FROM @Rows;
+END
+GO

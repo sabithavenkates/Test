@@ -1,0 +1,21 @@
+CREATE TABLE rec10.ReportRecord (
+    ReportRecordId   BIGINT IDENTITY(1,1) PRIMARY KEY,
+    IngestRunId      BIGINT NOT NULL,
+    SourceFile       NVARCHAR(260) NOT NULL,
+    FileType         NVARCHAR(30) NOT NULL,  -- CHG_REPORT or RECON_REPORT
+    LineNumber       INT NOT NULL,
+
+    NPI              CHAR(10) NULL,
+    ChangeType       CHAR(11) NULL,          -- e.g., 'FNAME', 'MNAME', 'LNAME', 'TITLE', etc (padded)
+    AbcbsValue       NVARCHAR(27) NULL,
+    LsvValue         NVARCHAR(27) NULL,
+
+    Raw80            CHAR(80) NOT NULL,
+    ParsedAtUtc      DATETIME2(3) NOT NULL DEFAULT SYSUTCDATETIME(),
+
+    CONSTRAINT FK_ReportRecord_IngestRun FOREIGN KEY (IngestRunId) REFERENCES rec10.IngestRun(IngestRunId)
+);
+GO
+
+CREATE INDEX IX_ReportRecord_RunNpi ON rec10.ReportRecord (IngestRunId, NPI);
+GO

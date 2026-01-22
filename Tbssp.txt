@@ -1,0 +1,8 @@
+CREATE OR ALTER PROCEDURE dbo.usp_LSVRec10_ClearProviderIdStage
+    @BatchId UNIQUEIDENTIFIER
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM dbo.LSVRec10ProviderIdStage WHERE BatchId = @BatchId;
+END
+GO
